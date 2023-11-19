@@ -6,11 +6,11 @@ ini_set('display_errors', 1);
 $abuse_ip_list_file = '/var/www/html/abuse_ip_list.txt';
 
 // Funktion zum Abrufen der aktuellen IP-Adresse
-function getCurrentIP()
+function getCurrentIP($abuse_ip_list_file)
 {
     $url = 'https://DEINEDOMAIN:DEINPWD@dyndns.strato.com/nic/update?hostname=DEINEDOMAIN';
 
-    $options = array(
+     $options = array(
         'http' => array(
             'header' => "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36\r\n"
         )
@@ -19,9 +19,28 @@ function getCurrentIP()
     $context = stream_context_create($options);
     $response = file_get_contents($url, false, $context);
 
+    // Ausgabe der tatsächlichen Antwort
+    echo 'Antwort von getCurrentIP(): ' . $response . PHP_EOL;
+
+    // Überprüfen Sie, ob die Antwort "abuse" enthält
+    if (strpos($response, 'abuse') !== false) {
+        echo 'Die Antwort von getCurrentIP() enthält "abuse".' . PHP_EOL;
+
+        // IP zur "Abuse" IP-Adressenliste hinzufügen
+        file_put_contents($abuse_ip_list_file, $response . PHP_EOL, FILE_APPEND);
+
+        // Verwenden Sie die UPnP-Funktion, um die FRITZ!Box neu zu verbinden
+        reconnectFritzBoxUPnP();
+
+        // Beende das Skript, da eine Neuverbindung durchgeführt wurde
+        exit();
+    }
+
     // Extrahieren Sie die IP-Adresse aus der Antwort
     preg_match('/\d+\.\d+\.\d+\.\d+/', $response, $matches);
     $ip = $matches[0];
+
+    echo 'Aktuelle IP-Adresse: ' . $ip . PHP_EOL;
 
     return $ip;
 }
@@ -72,49 +91,63 @@ EOT;
 }
 
 // Holen Sie sich die aktuelle IP-Adresse
-$current_ip = getCurrentIP();
+$current_ip = getCurrentIP($abuse_ip_list_file);
 
-// Überprüfen Sie, ob die derzeitige IP-Adresse bereits in der "Abuse" IP-Adressenliste ist oder die Webseite "abuse" zurückgibt
-if (strpos($current_ip, 'abuse') !== false || in_array($current_ip, file($abuse_ip_list_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES))) {
-    // Die derzeitige IP-Adresse ist in der "Abuse" IP-Adressenliste oder die Webseite gibt "abuse" zurück
-    echo 'Die derzeitige IP-Adresse ' . $current_ip . ' ist in der "Abuse" IP-Adressenliste oder die Webseite gibt "abuse" zurück. Neuverbindung wird durchgeführt.' . PHP_EOL;
-
-    // Verwenden Sie die UPnP-Funktion, um die FRITZ!Box neu zu verbinden
-    reconnectFritzBoxUPnP();
-} else {
-    // Alles OK, keine Neuverbindung erforderlich
-    echo 'Alles OK. Keine Neuverbindung erforderlich.' . PHP_EOL;
-}
+// Alles OK, keine Neuverbindung erforderlich
+echo 'Alles OK. Keine Neuverbindung erforderlich.' . PHP_EOL;
 
 // Haupt-Schleife
 while (true) {
     try {
-        // Warten Sie 60 Minuten
-        sleep(3600);
+        // Solange "abuse" in der Antwort enthalten ist, wiederhole den Vorgang alle 60 Sekunden
+        while (strpos($current_ip, 'abuse') !== false) {
+            // Warten Sie 5 Sekunden
+            sleep(5);
 
-        // Holen Sie sich die aktuelle IP-Adresse erneut
-        $new_ip = getCurrentIP();
+            // Holen Sie sich die aktuelle IP-Adresse erneut
+            $new_ip = getCurrentIP($abuse_ip_list_file);
 
-        echo 'Aktuelle IP-Adresse: ' . $new_ip . PHP_EOL;
+            echo 'Aktuelle IP-Adresse: ' . $new_ip . PHP_EOL;
 
-        // Überprüfen, ob sich die IP-Adresse geändert hat
-        if ($new_ip !== $current_ip) {
-            // Die IP-Adresse hat sich geändert
+            // Überprüfen, ob sich die IP-Adresse geändert hat
+            if ($new_ip !== $current_ip) {
+                // Die IP-Adresse hat sich geändert
 
-            // Wenn die Antwort "abuse" enthält, die IP-Adresse hinzufügen und neu verbinden
-            if (strpos($new_ip, 'abuse') !== false) {
-                $current_ip = $new_ip;
-                echo 'Die IP-Adresse ' . $current_ip . ' wurde als "Abuse" erkannt. Neuverbindung mit FritzBox wird durchgeführt.' . PHP_EOL;
+                // Wenn die Antwort "abuse" enthält, die IP-Adresse hinzufügen und neu verbinden
+                if (strpos($new_ip, 'abuse') !== false) {
+                    $current_ip = $new_ip;
 
-                // IP zur "Abuse" IP-Adressenliste hinzufügen
-                file_put_contents($abuse_ip_list_file, $current_ip . PHP_EOL, FILE_APPEND);
+                    // Überprüfen, ob die IP-Adresse bereits in der "Abuse" IP-Adressenliste ist
+                    if (isIPInList($current_ip, $abuse_ip_list_file)) {
+                        // Die IP-Adresse ist in der "Abuse" IP-Adressenliste
+                        echo 'Die IP-Adresse ' . $current_ip . ' ist bereits in der "Abuse" IP-Adressenliste. Neuverbindung wird durchgeführt.' . PHP_EOL;
 
-                // Verwenden Sie die UPnP-Funktion, um die FRITZ!Box neu zu verbinden
-                reconnectFritzBoxUPnP();
+                        // Verwenden Sie die UPnP-Funktion, um die FRITZ!Box neu zu verbinden
+                        reconnectFritzBoxUPnP();
+                    } else {
+                        // Die IP-Adresse ist nicht in der "Abuse" IP-Adressenliste
+                        echo 'Die IP-Adresse ' . $current_ip . ' wurde als "Abuse" erkannt. Neuverbindung mit FritzBox wird durchgeführt.' . PHP_EOL;
+
+                        // IP zur "Abuse" IP-Adressenliste hinzufügen
+                        file_put_contents($abuse_ip_list_file, $current_ip . PHP_EOL, FILE_APPEND);
+
+                        // Verwenden Sie die UPnP-Funktion, um die FRITZ!Box neu zu verbinden
+                        reconnectFritzBoxUPnP();
+                    }
+                }
             }
         }
+
+        // Wenn "abuse" nicht mehr in der Antwort enthalten ist, pausiere für 60 Minuten
+        sleep(3600);
     } catch (Exception $e) {
         echo 'Fehler beim Abrufen der IP-Adresse oder Neuverbinden mit der FritzBox: ' . $e->getMessage() . PHP_EOL;
     }
+}
+// Funktion zum Überprüfen, ob eine IP-Adresse bereits in der Liste ist
+function isIPInList($ip, $file)
+{
+    $ipList = file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    return in_array($ip, $ipList);
 }
 ?>
